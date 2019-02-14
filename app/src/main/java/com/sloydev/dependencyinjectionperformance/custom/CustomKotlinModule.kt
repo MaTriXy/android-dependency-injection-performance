@@ -1,14 +1,10 @@
-package com.sloydev.dependencyinjectionperformance.koin
+package com.sloydev.dependencyinjectionperformance.custom
 
 import com.sloydev.dependencyinjectionperformance.*
-import org.koin.dsl.module
 
-/**
- * Generated with https://gist.github.com/Sloy/12affca1e49ba052053ab4c8bfc5bcb4
- */
-val koinKotlinModule = module {
-    factory { Fib1() }
-    factory { Fib2() }
+val customKotlinModule = module {
+    single { Fib1() }
+    single { Fib2() }
     factory { Fib3(get(), get()) }
     factory { Fib4(get(), get()) }
     factory { Fib5(get(), get()) }

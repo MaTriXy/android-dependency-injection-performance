@@ -1,12 +1,9 @@
-package com.sloydev.dependencyinjectionperformance.koin
+package com.sloydev.dependencyinjectionperformance.custom
 
 import com.sloydev.dependencyinjectionperformance.FibonacciJava
-import org.koin.dsl.module
 
-/**
- * Generated with https://gist.github.com/Sloy/12affca1e49ba052053ab4c8bfc5bcb4
- */
-val koinJavaModule = module {
+
+val customJavaModule = module {
     factory { FibonacciJava.Fib1() }
     factory { FibonacciJava.Fib2() }
     factory { FibonacciJava.Fib3(get(), get()) }
@@ -457,4 +454,5 @@ val koinJavaModule = module {
     factory { FibonacciJava.Fib448(get(), get()) }
     factory { FibonacciJava.Fib449(get(), get()) }
     factory { FibonacciJava.Fib450(get(), get()) }
+
 }

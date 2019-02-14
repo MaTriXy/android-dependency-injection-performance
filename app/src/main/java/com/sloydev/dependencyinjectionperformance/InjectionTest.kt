@@ -1,20 +1,29 @@
 package com.sloydev.dependencyinjectionperformance
 
 import android.os.Build
-import android.util.Log
+import com.sloydev.dependencyinjectionperformance.custom.DIContainer
+import com.sloydev.dependencyinjectionperformance.custom.customJavaModule
+import com.sloydev.dependencyinjectionperformance.custom.customKotlinModule
 import com.sloydev.dependencyinjectionperformance.dagger2.DaggerJavaDaggerComponent
 import com.sloydev.dependencyinjectionperformance.dagger2.DaggerKotlinDaggerComponent
+import com.sloydev.dependencyinjectionperformance.dagger2.JavaDaggerComponent
+import com.sloydev.dependencyinjectionperformance.dagger2.KotlinDaggerComponent
+import com.sloydev.dependencyinjectionperformance.katana.katanaJavaModule
+import com.sloydev.dependencyinjectionperformance.katana.katanaKotlinModule
 import com.sloydev.dependencyinjectionperformance.koin.koinJavaModule
 import com.sloydev.dependencyinjectionperformance.koin.koinKotlinModule
 import org.kodein.di.Kodein
 import org.kodein.di.direct
 import org.kodein.di.erased.instance
-import org.koin.core.time.measureDuration
-import org.koin.log.Logger
-import org.koin.standalone.KoinComponent
-import org.koin.standalone.StandAloneContext
-import org.koin.standalone.StandAloneContext.stopKoin
-import org.koin.standalone.get
+import org.koin.core.KoinComponent
+import org.koin.core.context.startKoin
+import org.koin.core.context.stopKoin
+import org.koin.core.get
+import org.rewedigital.katana.Component
+import org.rewedigital.katana.Katana
+import org.rewedigital.katana.android.environment.AndroidEnvironmentContext
+import org.rewedigital.katana.android.environment.AndroidEnvironmentContext.Profile.SPEED
+import org.rewedigital.katana.createComponent
 import javax.inject.Inject
 
 class InjectionTest : KoinComponent {
@@ -24,106 +33,128 @@ class InjectionTest : KoinComponent {
 
     private val rounds = 100
 
-    private val testLogger = object : Logger {
-        override fun debug(msg: String) {
-            //Log.d("KOIN-PERFORMANCE", msg)
-        }
-
-        override fun info(msg: String) {
-        }
-
-        override fun err(msg: String) {
-        }
-    }
-
     fun runTests() {
-        Log.d("KOIN-RESULT", " ")
-        Log.d("KOIN-RESULT", "=========|=====================")
-        Log.d("KOIN-RESULT", "Device:  | ${Build.BRAND} ${Build.DEVICE} v${Build.VERSION.RELEASE}")
-        runKoinKotlinInjection()
-        runKoinJavaInjection()
-        runKodeinKotlinInjection()
-        runKodeinJavaInjection()
-        runDaggerKotlinInjection()
-        runDaggerJavaInjection()
-        Log.d("KOIN-RESULT", "=========|=====================")
-        Log.d("KOIN-RESULT", " ")
+        val results = listOf(
+            koinTest(),
+            kodeinTest(),
+            katanaTest(),
+            customTest(),
+            daggerTest()
+        )
+        reportMarkdown(results)
     }
 
-    private fun runKoinKotlinInjection() {
-        StandAloneContext.startKoin(listOf(koinKotlinModule), logger = testLogger)
-        val durations = (1..rounds).map {
-            measureDuration {
-                get<Fib8>()
-            }
+    private fun reportMarkdown(results: List<LibraryResult>) {
+        log("Done!")
+        log(" ")
+        log("${Build.BRAND} ${Build.DEVICE} with Android ${Build.VERSION.RELEASE}")
+        log(" ")
+        log("Library | Setup Kotlin | Setup Java | Inject Kotlin | Inject Java")
+        log("--- | ---:| ---:| ---:| ---:")
+        results.forEach {
+            log("**${it.injectorName}** | ${it[Variant.KOTLIN].startupTime.median().format()} | ${it[Variant.JAVA].startupTime.median().format()}  | ${it[Variant.KOTLIN].injectionTime.median().format()} | ${it[Variant.JAVA].injectionTime.median().format()}")
         }
-        report(durations, "Koin + Kotlin")
-        stopKoin()
     }
 
-    private fun runKoinJavaInjection() {
-        StandAloneContext.startKoin(listOf(koinJavaModule), logger = testLogger)
-        val durations = (1..rounds).map {
-            measureDuration {
-                get<FibonacciJava.Fib8>()
-            }
-        }
-        report(durations, "Koin + Java")
-        stopKoin()
+    private fun runTest(
+        setup: () -> Unit,
+        test: () -> Unit,
+        teardown: () -> Unit = {}
+    ): TestResult {
+        val startup = (1..rounds).map { measureTime { setup() }.also { teardown() } }
+        setup()
+
+        val testDurations = (1..rounds).map { measureTime { test() } }
+        teardown()
+        return TestResult(startup, testDurations)
     }
 
-    private fun runKodeinKotlinInjection() {
-        val kodein = Kodein {
-            import(kodeinKotlinModule)
-        }
-        val durations = (1..rounds).map {
-            measureDuration {
-                kodein.direct.instance<Fib8>()
-            }
-        }
-        report(durations, "Kodein + Kotlin")
+    private fun koinTest(): LibraryResult {
+        log("Running Koin...")
+        return LibraryResult("Koin", mapOf(
+            Variant.KOTLIN to runTest(
+                setup = {
+                    startKoin {
+                        modules(koinKotlinModule)
+                    }
+                },
+                test = { get<Fib8>() },
+                teardown = { stopKoin() }
+            ),
+            Variant.JAVA to runTest(
+                setup = {
+                    startKoin {
+                        modules(koinJavaModule)
+                    }
+                },
+                test = { get<FibonacciJava.Fib8>() },
+                teardown = { stopKoin() }
+            )
+        ))
     }
 
-    private fun runKodeinJavaInjection() {
-        val kodein = Kodein {
-            import(kodeinJavaModule)
-        }
-        val durations = (1..rounds).map {
-            measureDuration {
-                kodein.direct.instance<FibonacciJava.Fib8>()
-            }
-        }
-        report(durations, "Kodein + Java")
+    private fun kodeinTest(): LibraryResult {
+        log("Running Kodein...")
+        lateinit var kodein: Kodein
+        return LibraryResult("Kodein", mapOf(
+            Variant.KOTLIN to runTest(
+                setup = { kodein = Kodein { import(kodeinKotlinModule) } },
+                test = { kodein.direct.instance<Fib8>() }
+            ),
+            Variant.JAVA to runTest(
+                setup = { kodein = Kodein { import(kodeinKotlinModule) } },
+                test = { kodein.direct.instance<Fib8>() }
+            )
+        ))
     }
 
-    private fun runDaggerKotlinInjection() {
-        val component = DaggerKotlinDaggerComponent.create()
-        val durations = (1..rounds).map {
-            measureDuration {
-                component.inject(kotlinDaggerTest)
-            }
-        }
-        report(durations, "Dagger2 + Kotlin")
+    private fun katanaTest(): LibraryResult {
+        log("Running Katana...")
+        Katana.environmentContext = AndroidEnvironmentContext(profile = SPEED)
+        lateinit var component: Component
+        return LibraryResult("Katana", mapOf(
+            Variant.KOTLIN to runTest(
+                setup = { component = createComponent(modules = listOf(katanaKotlinModule)) },
+                test = { component.injectNow<Fib8>() }
+            ),
+            Variant.JAVA to runTest(
+                setup = { component = createComponent(modules = listOf(katanaJavaModule)) },
+                test = { component.injectNow<FibonacciJava.Fib8>() }
+            )
+        ))
     }
 
-    private fun runDaggerJavaInjection() {
-        val component = DaggerJavaDaggerComponent.create()
-        val durations = (1..rounds).map {
-            measureDuration {
-                component.inject(javaDaggerTest)
-            }
-        }
-        report(durations, "Dagger2 + Java")
+    private fun customTest(): LibraryResult {
+        log("Running Custom...")
+        return LibraryResult("Custom", mapOf(
+            Variant.KOTLIN to runTest(
+                setup = { DIContainer.loadModule(customKotlinModule) },
+                test = { DIContainer.get<Fib8>() },
+                teardown = { DIContainer.unloadModules() }
+            ),
+            Variant.JAVA to runTest(
+                setup = { DIContainer.loadModule(customJavaModule) },
+                test = { DIContainer.get<FibonacciJava.Fib8>() },
+                teardown = { DIContainer.unloadModules() }
+            )
+        ))
     }
 
-    private fun report(durations: List<Double>, testName: String) {
-        Log.d("KOIN-RESULT", "---------|--------------------")
-        Log.d("KOIN-RESULT", "Test:    | $testName")
-        Log.d("KOIN-RESULT", "Min-Max: | ${durations.min().format()}-${durations.max().format()} ms")
-        Log.d("KOIN-RESULT", "Average: | ${durations.average().format()} ms")
+    private fun daggerTest(): LibraryResult {
+        log("Running Dagger...")
+        lateinit var kotlinComponent: KotlinDaggerComponent
+        lateinit var javaComponent: JavaDaggerComponent
+        return LibraryResult("Dagger", mapOf(
+            Variant.KOTLIN to runTest(
+                setup = { kotlinComponent = DaggerKotlinDaggerComponent.create() },
+                test = { kotlinComponent.inject(kotlinDaggerTest) }
+            ),
+            Variant.JAVA to runTest(
+                setup = { javaComponent = DaggerJavaDaggerComponent.create() },
+                test = { javaComponent.inject(javaDaggerTest) }
+            )
+        ))
     }
-
-    private fun Double?.format() = String.format("%.2f", this)
 
     class KotlinDaggerTest {
         @Inject
